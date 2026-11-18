@@ -11,7 +11,6 @@ import Dashboard from './pages/admin/Dashboard'
 import ScanToken from './pages/admin/ScanToken'
 import QualityEntry from './pages/admin/QualityEntry'
 import Inventory from './pages/admin/Inventory'
-import TestBackend from './pages/farmer/TestBackend'
 import { MandiProvider } from './pages/admin/MandiContext'
 
 function Home() {
@@ -149,9 +148,6 @@ function App() {
           <Route path="/admin/quality" element={<QualityEntry />} />
 
           <Route path="/admin/inventory" element={<Inventory />} />
-
-          {/* Temporary PostgreSQL + FastAPI test */}
-          <Route path="/test-backend" element={<TestBackend />} />
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -34,7 +34,9 @@ export default function Register() {
       console.error(error);
 
       window.alert(
-        error.response?.data?.message || 'Could not create account.'
+        error.response?.data?.detail ||
+        error.response?.data?.message ||
+        'Could not create account.'
       );
     }
   };
