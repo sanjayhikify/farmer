@@ -2,10 +2,11 @@ from datetime import datetime, date
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from database.connection import get_db
 from models.farmer import Farmer
+from security import hash_pin, is_hashed_pin, verify_pin
 
 
 router = APIRouter()
@@ -16,24 +17,9 @@ router = APIRouter()
 # =========================
 
 class FarmerCreate(BaseModel):
-    name: str
-    phone: str
-    pin: str
-
-
-@router.get("/farmers")
-def get_farmers(db: Session = Depends(get_db)):
-    farmers = db.query(Farmer).all()
-
-    return [
-        {
-            "id": farmer.id,
-            "full_name": farmer.full_name,
-            "phone_number": farmer.phone_number,
-            "created_at": farmer.created_at,
-        }
-        for farmer in farmers
-    ]
+    name: str = Field(min_length=1, max_length=120)
+    phone: str = Field(pattern=r"^[0-9]{10}$")
+    pin: str = Field(pattern=r"^[0-9]{4}$")
 
 
 @router.post("/farmers")
@@ -56,7 +42,7 @@ def create_farmer(
     farmer = Farmer(
         full_name=data.name,
         phone_number=data.phone,
-        password_hash=data.pin,
+        password_hash=hash_pin(data.pin),
     )
 
     db.add(farmer)
@@ -78,8 +64,8 @@ def create_farmer(
 # =========================
 
 class FarmerLogin(BaseModel):
-    phone: str
-    pin: str
+    phone: str = Field(pattern=r"^[0-9]{10}$")
+    pin: str = Field(pattern=r"^[0-9]{4}$")
 
 
 @router.post("/login")
@@ -93,11 +79,15 @@ def login_farmer(
         .first()
     )
 
-    if not farmer or farmer.password_hash != data.pin:
+    if not farmer or not verify_pin(data.pin, farmer.password_hash):
         raise HTTPException(
             status_code=401,
             detail="Invalid Phone Number or PIN"
         )
+
+    if not is_hashed_pin(farmer.password_hash):
+        farmer.password_hash = hash_pin(data.pin)
+        db.commit()
 
     return {
         "message": "Login successful",
