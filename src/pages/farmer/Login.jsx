@@ -36,6 +36,9 @@ function Login() {
         id: loggedInFarmer.id,
         name: loggedInFarmer.full_name,
         phone: loggedInFarmer.phone_number,
+        village: loggedInFarmer.village || "",
+        district: loggedInFarmer.district || "",
+        landSize: loggedInFarmer.land_size || "",
       })
 
       window.alert('Login successful!')

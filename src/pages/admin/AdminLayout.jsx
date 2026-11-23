@@ -1,8 +1,10 @@
 import { Link, useLocation } from "react-router-dom";
 import "./admin.css";
+import { useMandi } from "./MandiContext";
 
 function AdminLayout({ children }) {
   const location = useLocation();
+  const { error, lastSyncedAt } = useMandi();
 
   const navItems = [
     {
@@ -106,8 +108,12 @@ function AdminLayout({ children }) {
           <div className="blockchain-card">
             <div className="sync-dot-pulse"></div>
             <div>
-              <p className="blockchain-title">Blockchain Synced</p>
-              <p className="blockchain-meta">Block #18,42,209 · 2s ago</p>
+              <p className="blockchain-title">
+                {error ? "Database Unavailable" : lastSyncedAt ? "PostgreSQL Connected" : "Connecting to database"}
+              </p>
+              <p className="blockchain-meta">
+                {lastSyncedAt ? `Synced ${lastSyncedAt.toLocaleTimeString()}` : error ? "Check API connection" : "Waiting for first data sync"}
+              </p>
             </div>
           </div>
 

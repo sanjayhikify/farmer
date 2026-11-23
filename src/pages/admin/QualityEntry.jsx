@@ -1,14 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import AdminLayout from "./AdminLayout";
-
-const ACTIVE_TOKENS = [
-  { id: "#AGRI-8403", farmer: "Sunita Devi", crop: "Paddy (PR-114)", basePrice: 2183, weight: 60, moisture: 11.2 },
-  { id: "#AGRI-8404", farmer: "Bhanwar Singh", crop: "Wheat (WH-1105)", basePrice: 2275, weight: 80, moisture: 10.8 },
-  { id: "#AGRI-8406", farmer: "Mohan Ram", crop: "Paddy (PB-1509)", basePrice: 2183, weight: 55, moisture: 12.5 },
-  { id: "#AGRI-8407", farmer: "Jagdish Prasad", crop: "Mustard (Pusa-31)", basePrice: 5650, weight: 40, moisture: 7.9 },
-  { id: "#AGRI-8408", farmer: "Kamla Choudhary", crop: "Wheat (Sharbati)", basePrice: 2450, weight: 70, moisture: 11.0 },
-  { id: "#AGRI-8410", farmer: "Mukesh Gurjar", crop: "Soybean (JS-335)", basePrice: 4892, weight: 65, moisture: 9.8 },
-];
+import API from "../../api";
+import { useMandi } from "./MandiContext";
 
 const GRADE_MULTIPLIERS = {
   "Grade A (FAQ Standard)": { multiplier: 1.0, badgeColor: "#059669", bg: "#ecfdf5" },
@@ -16,48 +9,31 @@ const GRADE_MULTIPLIERS = {
   "Grade C (Under-grade)": { multiplier: 0.88, badgeColor: "#dc2626", bg: "#fef2f2" },
 };
 
-function createTransactionHash() {
-  return `0x${Math.random().toString(16).substring(2, 6)}...${Math.random().toString(16).substring(2, 6)}`;
-}
-
 function QualityEntry() {
-  const [selectedTokenId, setSelectedTokenId] = useState(ACTIVE_TOKENS[1].id); // Default to Bhanwar Singh
-  const [weight, setWeight] = useState(80);
+  const { tokens, refresh } = useMandi();
+  const activeTokens = tokens.filter((token) => token.status === "Gate Verified" || token.status === "In Inspection");
+  const [selectedTokenId, setSelectedTokenId] = useState("");
+  const [weight, setWeight] = useState("");
   const [moisture, setMoisture] = useState(10.8);
   const [grade, setGrade] = useState("Grade A (FAQ Standard)");
   const [foreignMatter, setForeignMatter] = useState(0.75);
   const [inspectorNotes, setInspectorNotes] = useState("Uniform grain size, no weevil infestation, clean golden luster.");
   const [toastMessage, setToastMessage] = useState("");
+  const [qualityHistory, setQualityHistory] = useState([]);
+  const [isSaving, setIsSaving] = useState(false);
 
-  const [qualityHistory, setQualityHistory] = useState([
-    {
-      id: "#AGRI-8405",
-      farmer: "Geeta Kumari",
-      crop: "Cotton (Bt)",
-      weight: 35,
-      moisture: 8.5,
-      grade: "Grade A (FAQ Standard)",
-      rate: 7020,
-      totalPayout: 245700,
-      timestamp: "09:50 AM",
-      txHash: "0x91a0...33c1",
-    },
-    {
-      id: "#AGRI-8409",
-      farmer: "Devendra Yadav",
-      crop: "Bajra (HHB-67)",
-      weight: 50,
-      moisture: 9.2,
-      grade: "Grade A (FAQ Standard)",
-      rate: 2500,
-      totalPayout: 125000,
-      timestamp: "10:52 AM",
-      txHash: "0x22be...440d",
-    },
-  ]);
+  useEffect(() => {
+    API.get("/operations/quality")
+      .then((response) => setQualityHistory(response.data))
+      .catch((error) => {
+        console.error("Could not load quality history:", error);
+        setToastMessage("Could not load saved quality records.");
+      });
+  }, []);
 
   // Current token info
-  const currentToken = ACTIVE_TOKENS.find((t) => t.id === selectedTokenId) || ACTIVE_TOKENS[0];
+  const currentToken = activeTokens.find((t) => t.id === selectedTokenId) || activeTokens[0];
+  const effectiveWeight = Number(weight) || currentToken?.rawQuintals || 1;
 
   // Calculate Moisture Penalty
   // Optimal <= 12%, 12.1% - 14% -> 2% dockage, >14% -> 5% dockage
@@ -68,41 +44,43 @@ function QualityEntry() {
 
   // Net Rate calculation
   const effectiveMultiplier = gradeMultiplier - moistureDockage;
-  const netRatePerQtl = Math.round(currentToken.basePrice * effectiveMultiplier);
-  const totalPayout = Math.round(weight * netRatePerQtl);
+  const netRatePerQtl = Math.round((currentToken?.basePrice || 0) * effectiveMultiplier);
+  const totalPayout = Math.round(effectiveWeight * netRatePerQtl);
 
   const handleTokenChange = (e) => {
     const nextId = e.target.value;
     setSelectedTokenId(nextId);
-    const found = ACTIVE_TOKENS.find((t) => t.id === nextId);
+    const found = activeTokens.find((t) => t.id === nextId);
     if (found) {
-      setWeight(found.weight);
-      setMoisture(found.moisture);
+      setWeight(found.rawQuintals || 1);
+      setMoisture(Number.parseFloat(found.moisture) || 10.8);
     }
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-
-    const randomTx = createTransactionHash();
-    const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-
-    const newRecord = {
-      id: currentToken.id,
-      farmer: currentToken.farmer,
-      crop: currentToken.crop,
-      weight: Number(weight),
-      moisture: Number(moisture),
-      grade: grade,
-      rate: netRatePerQtl,
-      totalPayout: totalPayout,
-      timestamp: timeStr,
-      txHash: randomTx,
-    };
-
-    setQualityHistory([newRecord, ...qualityHistory]);
-    setToastMessage(`Quality Certified: ${currentToken.id} Payout ₹ ${totalPayout.toLocaleString()}`);
-    setTimeout(() => setToastMessage(""), 4000);
+    if (!currentToken) return;
+    setIsSaving(true);
+    try {
+      const response = await API.post("/operations/quality", {
+        token_id: currentToken.id,
+        weight: effectiveWeight,
+        moisture: Number(moisture),
+        foreign_matter: Number(foreignMatter),
+        grade,
+        inspector_notes: inspectorNotes,
+      });
+      setQualityHistory((previous) => [response.data, ...previous]);
+      setToastMessage(`Quality saved: ${currentToken.id}, payout ₹ ${totalPayout.toLocaleString()}`);
+      setSelectedTokenId("");
+      await refresh();
+      setTimeout(() => setToastMessage(""), 4000);
+    } catch (error) {
+      console.error("Could not save quality record:", error);
+      setToastMessage(error.response?.data?.detail || "Could not save quality record.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -111,16 +89,22 @@ function QualityEntry() {
         <div className="page-intro">
           <h1 className="text-dark-slate">Quality Inspection & Assay</h1>
           <p className="text-subtle-slate">
-            Laboratory moisture measurement, FAQ grading, and automatic MSP payout calculation.
+            Enter inspection measurements, assign a quality grade, and save a payout estimate.
           </p>
         </div>
         <div className="topbar-actions">
           <span className="mandi-badge text-dark-slate">
             <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#10b981", display: "inline-block" }}></span>
-            Laboratory Bay #02 Active
+            Manual Quality Entry
           </span>
         </div>
       </header>
+
+      {activeTokens.length === 0 && (
+        <div className="mb-4 rounded-lg bg-amber-50 p-4 text-sm font-semibold text-amber-800">
+          No gate-verified batches are awaiting quality inspection.
+        </div>
+      )}
 
       {/* Main Inspection Form Panel */}
       <div className="table-panel" style={{ padding: "32px", textAlign: "left" }}>
@@ -131,7 +115,7 @@ function QualityEntry() {
                 Produce Assay Record Entry
               </h2>
               <p className="text-subtle-slate" style={{ fontSize: "13.5px", margin: "4px 0 0" }}>
-                Select an enqueued farmer batch to verify laboratory readings.
+                Select a gate-approved token and enter its measured quality details.
               </p>
             </div>
             <span
@@ -145,7 +129,7 @@ function QualityEntry() {
                 fontFamily: "'JetBrains Mono', monospace",
               }}
             >
-              Base MSP: ₹ {currentToken.basePrice} / Qtl
+              Base MSP: ₹ {currentToken?.basePrice || 0} / Qtl
             </span>
           </div>
 
@@ -156,10 +140,10 @@ function QualityEntry() {
               <select
                 className="form-select input-high-contrast"
                 style={{ fontSize: "14px", fontWeight: 600 }}
-                value={selectedTokenId}
+                value={currentToken?.id || ""}
                 onChange={handleTokenChange}
               >
-                {ACTIVE_TOKENS.map((t) => (
+                {activeTokens.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.id} — {t.farmer} ({t.crop}) — Batch: {t.weight} Qtl
                   </option>
@@ -169,13 +153,13 @@ function QualityEntry() {
 
             {/* Batch Weight */}
             <div className="form-group">
-              <label className="form-label text-dark-slate">Weighbridge Net Weight (Quintals) *</label>
+              <label className="form-label text-dark-slate">Received Batch Weight (Quintals) *</label>
               <input
                 type="number"
                 step="0.5"
                 min="1"
                 className="form-input input-high-contrast"
-                value={weight}
+                value={weight || currentToken?.rawQuintals || ""}
                 onChange={(e) => setWeight(Number(e.target.value))}
                 required
               />
@@ -184,7 +168,7 @@ function QualityEntry() {
             {/* Moisture % */}
             <div className="form-group">
               <label className="form-label text-dark-slate">
-                Moisture Meter Reading (%) *{" "}
+                Moisture Measurement (%) *{" "}
                 <span style={{ color: moisture <= 12 ? "#059669" : "#d97706", fontWeight: 600 }}>
                   ({moisture <= 12 ? "Optimal Standard" : moisture <= 14 ? "2% Dockage" : "5% High Moisture Dockage"})
                 </span>
@@ -203,7 +187,7 @@ function QualityEntry() {
 
             {/* Quality Grade */}
             <div className="form-group">
-              <label className="form-label text-dark-slate">Certified Quality Grade *</label>
+              <label className="form-label text-dark-slate">Quality Grade *</label>
               <select
                 className="form-select input-high-contrast"
                 value={grade}
@@ -246,7 +230,7 @@ function QualityEntry() {
           <div className="payout-calculation-card">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <span style={{ fontSize: "14px", fontWeight: 700, color: "#0f172a" }}>
-                Dynamic MSP Settlement Computation
+                Estimated MSP Payout Calculation
               </span>
               <span
                 style={{
@@ -265,14 +249,14 @@ function QualityEntry() {
             <div className="payout-row">
               <span>Selected Produce:</span>
               <span className="text-dark-slate" style={{ fontWeight: 600 }}>
-                {currentToken.crop} ({currentToken.farmer})
+                {currentToken?.crop || "No batch selected"} ({currentToken?.farmer || "—"})
               </span>
             </div>
 
             <div className="payout-row">
-              <span>Govt Official Base MSP:</span>
+              <span>Configured Base MSP Rate:</span>
               <span className="text-dark-slate" style={{ fontWeight: 600 }}>
-                ₹ {currentToken.basePrice.toLocaleString()} / Quintal
+                ₹ {(currentToken?.basePrice || 0).toLocaleString()} / Quintal
               </span>
             </div>
 
@@ -286,14 +270,14 @@ function QualityEntry() {
             </div>
 
             <div className="payout-row">
-              <span>Final Certified Rate:</span>
+              <span>Estimated Net Rate:</span>
               <span className="text-dark-slate" style={{ fontWeight: 700 }}>
                 ₹ {netRatePerQtl.toLocaleString()} / Quintal
               </span>
             </div>
 
             <div className="payout-row total-row">
-              <span>Total Farmer Disbursement ({weight} Quintals):</span>
+              <span>Estimated Farmer Payout ({weight} Quintals):</span>
               <span className="payout-grand-total">₹ {totalPayout.toLocaleString()}</span>
             </div>
           </div>
@@ -303,12 +287,13 @@ function QualityEntry() {
             <button
               type="submit"
               className="btn-primary"
+              disabled={!currentToken || isSaving}
               style={{ padding: "12px 28px", fontSize: "14px" }}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="20 6 9 17 4 12"></polyline>
               </svg>
-              Submit Quality Record & Sign Escrow
+              {isSaving ? "Saving quality record..." : "Submit Quality Record"}
             </button>
           </div>
         </form>
@@ -318,9 +303,9 @@ function QualityEntry() {
       <div className="table-panel" style={{ marginTop: "24px" }}>
         <div className="table-panel-header">
           <div>
-            <h2 className="panel-title text-dark-slate">Today's Quality Inspection Ledger</h2>
+            <h2 className="panel-title text-dark-slate">Quality Inspection Ledger</h2>
             <p className="panel-subtitle text-subtle-slate">
-              {qualityHistory.length} batches graded and approved for blockchain payment
+              {qualityHistory.length} quality records saved; payment settlement is not integrated
             </p>
           </div>
         </div>
@@ -336,7 +321,7 @@ function QualityEntry() {
                 <th>Assigned Grade</th>
                 <th>Net Rate</th>
                 <th>Total Payout</th>
-                <th>Time & Tx</th>
+                <th>Recorded At & Reference</th>
               </tr>
             </thead>
             <tbody>
@@ -369,7 +354,7 @@ function QualityEntry() {
                   </td>
                   <td className="slot-cell text-dark-slate">
                     <div>{rec.timestamp}</div>
-                    <div style={{ fontSize: "10.5px", color: "#64748b" }}>{rec.txHash}</div>
+                    <div style={{ fontSize: "10.5px", color: "#64748b" }}>{rec.recordId}</div>
                   </td>
                 </tr>
               ))}

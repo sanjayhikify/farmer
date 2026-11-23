@@ -1,16 +1,43 @@
-# React + Vite
+# AgriFlow Farmer Procurement
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+AgriFlow is a React/Vite frontend with a FastAPI and PostgreSQL backend. Farmer registration, login, slot booking, queue information, Mandi token activity, quality records, inventory, and dispatch records use the backend database.
 
-Currently, two official plugins are available:
+## Run locally on Windows
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+1. Create a PostgreSQL database (the default example name is `farmerconnect`).
+2. Copy `backend\.env.example` to `backend\.env` and set `DATABASE_URL` to your PostgreSQL connection string. Keep `.env` files private.
+3. In a terminal:
 
-## React Compiler
+   ```powershell
+   cd backend
+   python -m venv venv
+   .\venv\Scripts\Activate.ps1
+   pip install -r requirements.txt
+   python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
+   ```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+   On startup, the API creates its application tables. The database user must have permission to create tables.
+4. In a second terminal at the repository root:
 
-## Expanding the ESLint configuration
+   ```powershell
+   npm install
+   npm run dev
+   ```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+   The frontend uses `http://localhost:8000` by default. Set `VITE_API_URL` in a root `.env` file to use a different API URL.
+
+The API health check is `http://localhost:8000/health`. PostgreSQL must be running before starting the API.
+
+Inventory facility quantities are initialized in the database on first access using the sample values previously shown in the demo UI; subsequent dispatches update the stored quantities and ledger.
+
+## Tests
+
+```powershell
+cd backend
+.\venv\Scripts\python.exe -m unittest discover -s tests
+```
+
+```powershell
+npm run build
+npm run lint
+```

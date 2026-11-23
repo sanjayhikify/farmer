@@ -9,4 +9,7 @@ class Farmer(Base):
     full_name = Column(String)
     phone_number = Column(String)
     password_hash = Column(String)
+    village = Column(String)
+    district = Column(String)
+    land_size = Column(String)
     created_at = Column(DateTime)

@@ -9,9 +9,12 @@ function dateOptions() {
   return Array.from({ length: 7 }, (_, index) => {
     const date = new Date()
     date.setDate(date.getDate() + index)
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
 
     return {
-      value: date.toISOString().slice(0, 10),
+      value: `${year}-${month}-${day}`,
       day: date.toLocaleDateString('en-IN', {
         weekday: 'short',
       }),
@@ -105,6 +108,8 @@ export default function SlotBooking() {
       const response = await API.post('/bookings', {
         farmer_id: farmer.id,
         slot_id: selectedSlot.id,
+        crop: bookingData.crop.trim(),
+        quantity: Number(bookingData.quantity),
       })
 
       console.log('Booking created:', response.data)

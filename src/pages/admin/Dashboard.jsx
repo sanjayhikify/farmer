@@ -2,42 +2,30 @@ import { useState, useEffect } from "react";
 import AdminLayout from "./AdminLayout";
 import { useMandi } from "./MandiContext";
 
-const CROP_PRICES = {
-  "Wheat (HD-2967)": "₹ 2,275 / Qtl",
-  "Wheat (WH-1105)": "₹ 2,275 / Qtl",
-  "Wheat (Sharbati)": "₹ 2,450 / Qtl",
-  "Paddy (PR-114)": "₹ 2,183 / Qtl",
-  "Paddy (PB-1509)": "₹ 2,183 / Qtl",
-  "Cotton (Bt)": "₹ 7,020 / Qtl",
-  "Mustard (Pusa-31)": "₹ 5,650 / Qtl",
-  "Bajra (HHB-67)": "₹ 2,500 / Qtl",
-  "Soybean (JS-335)": "₹ 4,892 / Qtl",
-};
-
-const BASE_ALL_CURVE = {
-  "9 AM": 42,
-  "10 AM": 78,
-  "11 AM": 128,
-  "12 PM": 162,
-  "1 PM": 96,
-  "2 PM": 68,
-  "3 PM": 186,
-  "4 PM": 142,
-  "5 PM": 90,
-};
-
 const HOURS_LIST = ["9 AM", "10 AM", "11 AM", "12 PM", "1 PM", "2 PM", "3 PM", "4 PM", "5 PM"];
+const CROP_OPTIONS = [
+  "Wheat (HD-2967)",
+  "Wheat (WH-1105)",
+  "Wheat (Sharbati)",
+  "Paddy (PR-114)",
+  "Paddy (PB-1509)",
+  "Cotton (Bt)",
+  "Mustard (Pusa-31)",
+  "Bajra (HHB-67)",
+  "Soybean (JS-335)",
+];
 
 function Dashboard() {
   // Shared state from MandiContext (synced with ScanToken and across tabs)
-  const { tokens, addToken } = useMandi();
+  const { tokens, addToken, refresh, summary, error: operationsError, lastSyncedAt } = useMandi();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedFilter, setSelectedFilter] = useState("All Tokens");
-  const [secondsAgo, setSecondsAgo] = useState(2);
+  const [now, setNow] = useState(0);
   const [selectedToken, setSelectedToken] = useState(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
+  const [isSavingToken, setIsSavingToken] = useState(false);
 
   // Form State for Token Issuance
   const [formData, setFormData] = useState({
@@ -53,16 +41,20 @@ function Dashboard() {
   // Live timer simulation
   useEffect(() => {
     const timer = setInterval(() => {
-      setSecondsAgo((prev) => (prev >= 20 ? 1 : prev + 1));
+      setNow(Date.now());
     }, 1000);
     return () => clearInterval(timer);
   }, []);
+  const secondsAgo = lastSyncedAt
+    ? Math.max(0, Math.floor((now - lastSyncedAt.getTime()) / 1000))
+    : null;
 
   const filterOptions = [
     "All Tokens",
     "Waiting",
     "Gate Verified",
     "In Inspection",
+    "Quality Complete",
     "Paid",
   ];
 
@@ -100,37 +92,25 @@ function Dashboard() {
       case "In Inspection":
         return "status-in-inspection";
       case "Paid":
+      case "Quality Complete":
         return "status-paid";
       default:
         return "";
     }
   };
 
-  // Generate next sequential token ID
-  const getNextTokenId = () => {
-    const numbers = tokens
-      .map((t) => {
-        const match = t.id.match(/\d+/);
-        return match ? parseInt(match[0], 10) : 0;
-      })
-      .filter((n) => !isNaN(n));
-    const maxNum = numbers.length > 0 ? Math.max(...numbers) : 8400;
-    return `#AGRI-${maxNum + 1}`;
-  };
-
   // =========================================================================
   // Dynamic Calculation of Throughput Graph based on Selected Filter
   // =========================================================================
   const rawThroughputData = HOURS_LIST.map((hour) => {
-    if (selectedFilter === "All Tokens") {
-      const val = BASE_ALL_CURVE[hour] || 0;
-      return { time: hour, value: val, max: 200 };
-    }
-
-    // Calculate sum of quintals for tokens matching the active filter in this hour
-    const matchingInHour = tokens.filter(
-      (t) => t.status === selectedFilter && (t.hourSlot === hour || t.slot?.includes(hour.split(" ")[0]))
-    );
+    const matchingInHour = tokens.filter((token) => {
+      const time = token.slot?.match(/(\d{1,2})(?::\d{2})?\s*(AM|PM)/i);
+      if (!time) return false;
+      let hourNumber = Number(time[1]) % 12;
+      if (time[2].toUpperCase() === "PM") hourNumber += 12;
+      const label = `${hourNumber % 12 || 12} ${hourNumber >= 12 ? "PM" : "AM"}`;
+      return label === hour && (selectedFilter === "All Tokens" || token.status === selectedFilter);
+    });
     const quintals = matchingInHour.reduce(
       (acc, t) => acc + (t.rawQuintals || parseInt(t.quantity, 10) || 50),
       0
@@ -139,7 +119,7 @@ function Dashboard() {
     return {
       time: hour,
       value: quintals,
-      max: 120, // Scaled for subset view
+      max: Math.max(120, quintals),
     };
   });
 
@@ -156,60 +136,42 @@ function Dashboard() {
   const totalFilteredQuintals = rawThroughputData.reduce((acc, d) => acc + d.value, 0);
 
   // Handle Token Form Submission
-  const handleCreateToken = (e) => {
+  const handleCreateToken = async (e) => {
     e.preventDefault();
     if (!formData.farmer.trim()) {
       alert("Please enter farmer name.");
       return;
     }
 
-    const nextId = getNextTokenId();
-    const randomTx = `0x${Math.random().toString(16).substring(2, 6)}...${Math.random().toString(16).substring(2, 6)}`;
-    const qtlNum = parseInt(formData.quantity, 10) || 50;
-
-    const hourSlot = formData.slot.includes("11:")
-      ? "11 AM"
-      : formData.slot.includes("12:")
-      ? "12 PM"
-      : formData.slot.includes("02:")
-      ? "2 PM"
-      : "10 AM";
-
-    const newToken = {
-      id: nextId,
-      farmer: formData.farmer.trim(),
-      phone: formData.phone.trim() || "+91 9829" + Math.floor(10000 + Math.random() * 90000),
-      village: formData.village.trim() || "Jaipur District",
-      crop: formData.crop,
-      cropCategory: formData.crop.split(" ")[0],
-      quantity: `${qtlNum} Qtl`,
-      rawQuintals: qtlNum,
-      slot: formData.slot,
-      hourSlot: hourSlot,
-      status: formData.status,
-      moisture: formData.status === "Waiting" ? "--" : "11.0%",
-      grade: formData.status === "Waiting" ? "Pending Gate Entry" : "Queue for Inspection",
-      price: CROP_PRICES[formData.crop] || "₹ 2,275 / Qtl",
-      txHash: randomTx,
-      vehicle: "RJ-14-GA-" + Math.floor(1000 + Math.random() * 9000),
-    };
-
-    addToken(newToken);
-    setSecondsAgo(0);
-
-    setFormData({
-      farmer: "",
-      phone: "",
-      village: "Jaipur Rural",
-      crop: "Wheat (HD-2967)",
-      quantity: "50",
-      slot: "11:15 AM",
-      status: "Waiting",
-    });
-    setIsCreateModalOpen(false);
-
-    setToastMessage(`Token ${nextId} created for ${newToken.farmer}!`);
-    setTimeout(() => setToastMessage(""), 4000);
+    setIsSavingToken(true);
+    try {
+      const newToken = await addToken({
+        farmer: formData.farmer.trim(),
+        phone: formData.phone.trim(),
+        village: formData.village.trim(),
+        crop: formData.crop,
+        rawQuintals: Number(formData.quantity),
+        slot: formData.slot,
+        status: formData.status,
+      });
+      setFormData({
+        farmer: "",
+        phone: "",
+        village: "Jaipur Rural",
+        crop: "Wheat (HD-2967)",
+        quantity: "50",
+        slot: "11:15 AM",
+        status: "Waiting",
+      });
+      setIsCreateModalOpen(false);
+      setToastMessage(`Token ${newToken.id} created for ${newToken.farmer}!`);
+      setTimeout(() => setToastMessage(""), 4000);
+    } catch (error) {
+      console.error("Could not create procurement token:", error);
+      setToastMessage(error.response?.data?.detail || "Could not save token to the database.");
+    } finally {
+      setIsSavingToken(false);
+    }
   };
 
   return (
@@ -238,7 +200,9 @@ function Dashboard() {
           </button>
           <button
             className="btn-secondary"
-            onClick={() => setSecondsAgo(0)}
+            onClick={() => {
+              refresh();
+            }}
             title="Refresh Live Telemetry"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -249,11 +213,17 @@ function Dashboard() {
         </div>
       </header>
 
+      {operationsError && (
+        <div role="alert" className="mb-4 rounded-lg bg-red-50 p-4 text-sm font-semibold text-red-700">
+          {operationsError}
+        </div>
+      )}
+
       {/* KPI Cards Row (Connected dynamically with MandiContext) */}
       <section className="kpi-grid">
         <div className="kpi-card">
           <div className="kpi-header">
-            <span className="kpi-label">Today's Intake</span>
+            <span className="kpi-label">Booked Volume</span>
             <div className="kpi-icon-pill" style={{ background: "#ecfdf5", color: "#059669" }}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"></path>
@@ -262,13 +232,9 @@ function Dashboard() {
               </svg>
             </div>
           </div>
-          <p className="kpi-value">1,248 Qtl</p>
+          <p className="kpi-value">{summary.intakeQtl.toLocaleString()} Qtl</p>
           <div className="kpi-trend positive">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"></polyline>
-              <polyline points="16 7 22 7 22 13"></polyline>
-            </svg>
-            <span>+14.2% vs yesterday</span>
+            <span>Quintals in saved Mandi tokens</span>
           </div>
         </div>
 
@@ -302,18 +268,17 @@ function Dashboard() {
               </svg>
             </div>
           </div>
-          <p className="kpi-value">Grade A (94%)</p>
+          <p className="kpi-value">Grade A ({summary.averageGradeA}%)</p>
           <div className="kpi-trend positive">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="20 6 9 17 4 12"></polyline>
-            </svg>
-            <span>Avg moisture: 10.9% (Optimal)</span>
+            <span>
+              Avg moisture: {summary.averageMoisture === null ? "—" : `${summary.averageMoisture}%`}
+            </span>
           </div>
         </div>
 
         <div className="kpi-card">
           <div className="kpi-header">
-            <span className="kpi-label">Total MSP Disbursed</span>
+            <span className="kpi-label">Estimated MSP Payout</span>
             <div className="kpi-icon-pill" style={{ background: "#fffbeb", color: "#d97706" }}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect width="20" height="14" x="2" y="5" rx="2"></rect>
@@ -321,9 +286,9 @@ function Dashboard() {
               </svg>
             </div>
           </div>
-          <p className="kpi-value">₹ 28,32,960</p>
+          <p className="kpi-value">₹ {summary.totalPayout.toLocaleString()}</p>
           <div className="kpi-trend positive">
-            <span>100% Escrow Blockchain Synced</span>
+            <span>{summary.qualityRecords} saved records; settlement not integrated</span>
           </div>
         </div>
       </section>
@@ -334,10 +299,10 @@ function Dashboard() {
         <div className="chart-panel">
           <div className="panel-header">
             <div>
-              <h2 className="panel-title">Hourly Procurement Throughput</h2>
+              <h2 className="panel-title">Booked Volume by Arrival Window</h2>
               <p className="panel-subtitle">
                 {selectedFilter === "All Tokens"
-                  ? "Quintals processed per hour"
+                  ? "Scheduled quintals by slot hour"
                   : `${selectedFilter} load: ${totalFilteredQuintals} Quintals`}
               </p>
             </div>
@@ -417,7 +382,7 @@ function Dashboard() {
             <div>
               <h2 className="panel-title">Live Operations Queue</h2>
               <p className="panel-subtitle">
-                {filteredTokens.length} {filteredTokens.length === 1 ? "token" : "tokens"} · Updated {secondsAgo}s ago
+                {filteredTokens.length} {filteredTokens.length === 1 ? "token" : "tokens"} · {secondsAgo === null ? "Loading" : `Updated ${secondsAgo}s ago`}
               </p>
             </div>
 
@@ -563,7 +528,7 @@ function Dashboard() {
                 <div>
                   <h3 className="modal-title">Issue Procurement Token</h3>
                   <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
-                    Generate appointment slot & blockchain queue token
+                    Save an appointment and issue an operations token
                   </span>
                 </div>
                 <button
@@ -618,7 +583,7 @@ function Dashboard() {
                       value={formData.crop}
                       onChange={(e) => setFormData({ ...formData, crop: e.target.value })}
                     >
-                      {Object.keys(CROP_PRICES).map((cropName) => (
+                      {CROP_OPTIONS.map((cropName) => (
                         <option key={cropName} value={cropName}>
                           {cropName}
                         </option>
@@ -678,8 +643,8 @@ function Dashboard() {
                 >
                   Cancel
                 </button>
-                <button type="submit" className="btn-primary">
-                  Generate Token & Enqueue
+                <button type="submit" className="btn-primary" disabled={isSavingToken}>
+                  {isSavingToken ? "Saving token..." : "Generate Token & Enqueue"}
                 </button>
               </div>
             </form>
@@ -749,9 +714,9 @@ function Dashboard() {
                 </span>
               </div>
               <div className="detail-row" style={{ borderBottom: "none" }}>
-                <span className="detail-label">Blockchain Hash:</span>
+                <span className="detail-label">Database token reference:</span>
                 <span className="detail-value" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "12px", color: "#64748b" }}>
-                  {selectedToken.txHash}
+                  {selectedToken.id}
                 </span>
               </div>
             </div>
