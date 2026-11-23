@@ -1,48 +1,6 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import AdminLayout from "./AdminLayout";
-
-const INITIAL_FACILITIES = [
-  {
-    id: "SILO-02",
-    crop: "Wheat (HD-2967)",
-    silo: "Silo Bay #02",
-    current: 4250,
-    capacity: 6000,
-    grade: "Grade A FAQ",
-    mspRate: 2275,
-    lastInspected: "Today, 08:30 AM",
-  },
-  {
-    id: "SILO-04",
-    crop: "Paddy (PR-114)",
-    silo: "Silo Bay #04",
-    current: 2890,
-    capacity: 5000,
-    grade: "Grade A Fine",
-    mspRate: 2183,
-    lastInspected: "Today, 09:15 AM",
-  },
-  {
-    id: "SHED-C",
-    crop: "Cotton (Bt)",
-    silo: "Warehouse Shed C",
-    current: 1280,
-    capacity: 1500,
-    grade: "Premium Long Staple",
-    mspRate: 7020,
-    lastInspected: "Today, 10:00 AM",
-  },
-  {
-    id: "SILO-01",
-    crop: "Mustard (Pusa-31)",
-    silo: "Silo Bay #01",
-    current: 1140,
-    capacity: 3000,
-    grade: "Oil Content 41%",
-    mspRate: 5650,
-    lastInspected: "Today, 10:45 AM",
-  },
-];
+import API from "../../api";
 
 const DESTINATIONS = [
   "FCI Central Grain Depot (Sanganer)",
@@ -53,13 +11,16 @@ const DESTINATIONS = [
 ];
 
 function Inventory() {
-  const [facilities, setFacilities] = useState(INITIAL_FACILITIES);
+  const [facilities, setFacilities] = useState([]);
   const [isDispatchModalOpen, setIsDispatchModalOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
+  const [isLoading, setIsLoading] = useState(true);
   // Dispatch Form State
   const [dispatchForm, setDispatchForm] = useState({
-    facilityId: INITIAL_FACILITIES[0].id,
+    facilityId: "",
     quantity: 250,
     destination: DESTINATIONS[0],
     truckNumber: "RJ-14-GA-8921",
@@ -67,50 +28,61 @@ function Inventory() {
     driverPhone: "+91 94140 12098",
   });
 
-  const [dispatchLedger, setDispatchLedger] = useState([
-    {
-      gatePass: "#GP-DISP-910",
-      crop: "Wheat (HD-2967)",
-      from: "Silo Bay #02",
-      quantity: 300,
-      destination: "FCI Central Grain Depot (Sanganer)",
-      truck: "RJ-14-GA-4412",
-      timestamp: "08:45 AM",
-      status: "In Transit",
-    },
-    {
-      gatePass: "#GP-DISP-909",
-      crop: "Paddy (PR-114)",
-      from: "Silo Bay #04",
-      quantity: 200,
-      destination: "Rajasthan State Food Reserve",
-      truck: "RJ-14-TB-7701",
-      timestamp: "Yesterday, 04:30 PM",
-      status: "Delivered",
-    },
-  ]);
+  const [dispatchLedger, setDispatchLedger] = useState([]);
+
+  const loadInventory = useCallback(async () => {
+    try {
+      const [facilityResponse, dispatchResponse] = await Promise.all([
+        API.get("/operations/inventory"),
+        API.get("/operations/dispatches"),
+      ]);
+      setFacilities(facilityResponse.data);
+      setDispatchLedger(dispatchResponse.data);
+      setErrorMessage("");
+      setDispatchForm((previous) => ({
+        ...previous,
+        facilityId: previous.facilityId || facilityResponse.data[0]?.id || "",
+      }));
+    } catch (error) {
+      console.error("Could not load inventory:", error);
+      setErrorMessage("Could not load inventory from the database.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    Promise.resolve().then(loadInventory);
+  }, [loadInventory]);
 
   // Total summary calculations
   const totalStored = facilities.reduce((sum, f) => sum + f.current, 0);
   const totalCapacity = facilities.reduce((sum, f) => sum + f.capacity, 0);
   const totalFree = totalCapacity - totalStored;
-  const overallUtilizationPct = ((totalStored / totalCapacity) * 100).toFixed(1);
+  const overallUtilizationPct = totalCapacity
+    ? ((totalStored / totalCapacity) * 100).toFixed(1)
+    : "0.0";
 
-  const selectedFacility = facilities.find((f) => f.id === dispatchForm.facilityId) || facilities[0];
+  const selectedFacility = facilities.find((f) => f.id === dispatchForm.facilityId);
 
   const handleOpenDispatch = (facilityId) => {
+    if (!facilities.length) return;
     setDispatchForm({
       ...dispatchForm,
-      facilityId: facilityId || facilities[0].id,
+      facilityId: facilityId || facilities[0]?.id || "",
       quantity: 100,
     });
     setIsDispatchModalOpen(true);
   };
 
-  const handleDispatchSubmit = (e) => {
+  const handleDispatchSubmit = async (e) => {
     e.preventDefault();
 
     const qty = Number(dispatchForm.quantity);
+    if (!selectedFacility) {
+      setErrorMessage("No storage facility is available for dispatch.");
+      return;
+    }
     if (qty <= 0) {
       alert("Please enter a valid dispatch quantity greater than 0.");
       return;
@@ -120,31 +92,26 @@ function Inventory() {
       return;
     }
 
-    // Deduct stock in state
-    setFacilities((prev) =>
-      prev.map((f) => (f.id === selectedFacility.id ? { ...f, current: f.current - qty } : f))
-    );
-
-    // Add entry to ledger
-    const randomPass = `#GP-DISP-${Math.floor(920 + Math.random() * 80)}`;
-    const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-
-    const newLedgerEntry = {
-      gatePass: randomPass,
-      crop: selectedFacility.crop,
-      from: selectedFacility.silo,
-      quantity: qty,
-      destination: dispatchForm.destination,
-      truck: dispatchForm.truckNumber || "RJ-14-XX-0000",
-      timestamp: timeStr,
-      status: "In Transit",
-    };
-
-    setDispatchLedger([newLedgerEntry, ...dispatchLedger]);
-    setIsDispatchModalOpen(false);
-
-    setToastMessage(`Dispatched ${qty} Qtl ${selectedFacility.crop} to ${dispatchForm.destination}`);
-    setTimeout(() => setToastMessage(""), 4500);
+    setIsSaving(true);
+    try {
+      await API.post("/operations/dispatches", {
+        facility_id: selectedFacility.id,
+        quantity: qty,
+        destination: dispatchForm.destination,
+        truck_number: dispatchForm.truckNumber,
+        driver_name: dispatchForm.driverName,
+        driver_phone: dispatchForm.driverPhone,
+      });
+      await loadInventory();
+      setIsDispatchModalOpen(false);
+      setToastMessage(`Dispatched ${qty} Qtl ${selectedFacility.crop} to ${dispatchForm.destination}`);
+      setTimeout(() => setToastMessage(""), 4500);
+    } catch (error) {
+      console.error("Could not save dispatch:", error);
+      setErrorMessage(error.response?.data?.detail || "Could not save dispatch.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const getMeterColorClass = (pct) => {
@@ -159,13 +126,14 @@ function Inventory() {
         <div className="page-intro">
           <h1 className="text-dark-slate">Procurement Inventory & Silos</h1>
           <p className="text-subtle-slate">
-            Live Mandi warehouse stocks, automated capacity meters, and outbound dispatch ledger.
+            PostgreSQL-backed warehouse balances and dispatch ledger. Initial stock values are samples; reconcile them with verified stock before authorizing a dispatch.
           </p>
         </div>
         <div className="topbar-actions">
           <button
             className="btn-primary"
             onClick={() => handleOpenDispatch()}
+            disabled={isLoading || facilities.length === 0}
             title="Dispatch grain batch to FCI or State Reserve"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -176,6 +144,13 @@ function Inventory() {
           </button>
         </div>
       </header>
+
+      {errorMessage && (
+        <div role="alert" className="mb-4 rounded-lg bg-red-50 p-4 text-sm font-semibold text-red-700">
+          {errorMessage}
+        </div>
+      )}
+      {isLoading && <p className="mb-4 text-sm text-slate-600">Loading database inventory...</p>}
 
       {/* Top Storage Capacity KPI Cards */}
       <section className="kpi-grid">
@@ -244,7 +219,7 @@ function Inventory() {
             Cr
           </p>
           <div className="kpi-trend positive">
-            <span>Government MSP Valuation</span>
+            <span>Configured MSP Valuation</span>
           </div>
         </div>
       </section>
@@ -252,7 +227,7 @@ function Inventory() {
       {/* Live Storage Capacity Meters */}
       <section>
         <h2 className="text-dark-slate" style={{ fontSize: "18px", fontWeight: 700, margin: "0 0 14px 0" }}>
-          Live Silo & Warehouse Capacity Meters
+          Silo & Warehouse Capacity Meters
         </h2>
 
         <div className="capacity-meters-grid">
@@ -457,12 +432,12 @@ function Inventory() {
                   <div className="form-group">
                     <label className="form-label text-dark-slate">
                       Dispatch Quantity (Quintals) *{" "}
-                      <span style={{ color: "#059669" }}>(Max: {selectedFacility.current} Qtl)</span>
+                      <span style={{ color: "#059669" }}>(Max: {selectedFacility?.current || 0} Qtl)</span>
                     </label>
                     <input
                       type="number"
                       min="1"
-                      max={selectedFacility.current}
+                      max={selectedFacility?.current || 0}
                       className="form-input input-high-contrast"
                       value={dispatchForm.quantity}
                       onChange={(e) => setDispatchForm({ ...dispatchForm, quantity: e.target.value })}
@@ -510,6 +485,16 @@ function Inventory() {
                       onChange={(e) => setDispatchForm({ ...dispatchForm, driverName: e.target.value })}
                     />
                   </div>
+                  <div className="form-group">
+                    <label className="form-label text-dark-slate">Driver Phone *</label>
+                    <input
+                      type="tel"
+                      className="form-input input-high-contrast"
+                      value={dispatchForm.driverPhone}
+                      onChange={(e) => setDispatchForm({ ...dispatchForm, driverPhone: e.target.value })}
+                      required
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -521,8 +506,8 @@ function Inventory() {
                 >
                   Cancel
                 </button>
-                <button type="submit" className="btn-primary">
-                  Sign Gate Pass & Dispatch
+                <button type="submit" className="btn-primary" disabled={isSaving}>
+                  {isSaving ? "Saving dispatch..." : "Sign Gate Pass & Dispatch"}
                 </button>
               </div>
             </form>

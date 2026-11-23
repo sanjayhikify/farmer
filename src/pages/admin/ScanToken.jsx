@@ -4,7 +4,7 @@ import AdminLayout from "./AdminLayout";
 import { useMandi } from "./MandiContext";
 
 function ScanToken() {
-  const { tokens, updateTokenStatus, stats, recordScan } = useMandi();
+  const { tokens, updateTokenStatus, stats, error: operationsError } = useMandi();
 
   const [activeTab, setActiveTab] = useState("camera"); // "camera" | "manual"
   const [isScanning, setIsScanning] = useState(false);
@@ -14,6 +14,7 @@ function ScanToken() {
   const [scanFeedback, setScanFeedback] = useState("");
   const [scanError, setScanError] = useState("");
   const [toastMessage, setToastMessage] = useState("");
+  const [gatePass, setGatePass] = useState("");
   const [isSampleQrModalOpen, setIsSampleQrModalOpen] = useState(false);
 
   // Webcam State
@@ -163,7 +164,7 @@ function ScanToken() {
         console.log("Live QR Captured from Camera:", rawString);
 
         // Strict Format Validation: Must match "#AGRI-XXXX" or "AGRI-XXXX"
-        const tokenMatch = rawString.match(/#?AGRI-\d+/i);
+        const tokenMatch = rawString.match(/^#?(?:AGRI-\d+|AG-\d+|FC-\d+-[a-f0-9]+)$/i);
 
         if (tokenMatch) {
           const matchedId = tokenMatch[0].toUpperCase().replace(/^#?/, "#");
@@ -260,34 +261,39 @@ function ScanToken() {
   };
 
   // Step 3: Gate Entry Approval
-  const handleApproveEntry = () => {
+  const handleApproveEntry = async () => {
     if (!scannedToken) return;
 
     const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-    // Update global shared state
-    updateTokenStatus(scannedToken.id, "Gate Verified", {
-      verifiedAt: timeStr,
-      bayAllocated: "Bay 2 (Weighbridge & Assay)",
-    });
-
-    // Increment approved stats
-    recordScan(true);
-
-    setCurrentStep(3);
-    setToastMessage(`Gate Pass Issued for ${scannedToken.farmer} (${scannedToken.id})`);
-    setTimeout(() => setToastMessage(""), 4500);
+    try {
+      const approval = await updateTokenStatus(scannedToken.id, "Gate Verified", {
+        verifiedAt: timeStr,
+        bayAllocated: "Bay 2 (Weighbridge & Assay)",
+      });
+      setGatePass(approval.gatePass);
+      setCurrentStep(3);
+      setToastMessage(`Gate Pass Issued for ${scannedToken.farmer} (${scannedToken.id})`);
+      setTimeout(() => setToastMessage(""), 4500);
+    } catch (error) {
+      console.error("Could not approve gate entry:", error);
+      setScanError(error.response?.data?.detail || "Could not save gate approval.");
+    }
   };
 
   // Step 3: Gate Entry Rejection
-  const handleRejectEntry = () => {
+  const handleRejectEntry = async () => {
     if (!scannedToken) return;
 
-    recordScan(false);
-    setToastMessage(`Entry Rejected for ${scannedToken.id}: Incomplete Documentation`);
-    setTimeout(() => setToastMessage(""), 4000);
-
-    handleResetScanner();
+    try {
+      await updateTokenStatus(scannedToken.id, "Rejected");
+      setToastMessage(`Entry Rejected for ${scannedToken.id}: Incomplete Documentation`);
+      setTimeout(() => setToastMessage(""), 4000);
+      handleResetScanner();
+    } catch (error) {
+      console.error("Could not reject gate entry:", error);
+      setScanError(error.response?.data?.detail || "Could not save gate rejection.");
+    }
   };
 
   // Reset to scan next vehicle
@@ -298,6 +304,7 @@ function ScanToken() {
     setScanError("");
     setScanFeedback("");
     setIsScanning(false);
+    setGatePass("");
   };
 
   return (
@@ -331,7 +338,7 @@ function ScanToken() {
               Gate Verification Scanner
             </h1>
             <p className="text-subtle-slate" style={{ fontSize: "13.5px", margin: "3px 0 0 0" }}>
-              Strict optical QR parsing on live camera feed. Only verified farmer tokens admitted.
+              Scan or enter a token from the operations database before approving gate entry.
             </p>
           </div>
         </div>
@@ -356,6 +363,12 @@ function ScanToken() {
           </span>
         </div>
       </header>
+
+      {(operationsError || tokens.length === 0) && (
+        <div role="alert" className="mb-4 rounded-lg bg-[#fff0e8] p-4 text-sm font-semibold text-[#a55025]">
+          {operationsError || "No procurement tokens are available from the database yet."}
+        </div>
+      )}
 
       {/* Main 2-Column Scanner Interface */}
       <div className="scanner-page-grid">
@@ -678,7 +691,7 @@ function ScanToken() {
           )}
         </div>
 
-        {/* Right Column: 3-Step Process Stepper, Tamper-Proof & Stats */}
+        {/* Right Column: 3-Step Process Stepper, database record & stats */}
         <div className="scanner-right-panel">
           {/* Card 1: Gate Verification Process Stepper */}
           <div className="stepper-process-card">
@@ -751,7 +764,7 @@ function ScanToken() {
                     </svg>
                     Approve Gate Entry
                   </div>
-                  <p className="step-desc-text">Issue gate pass for procurement queue</p>
+                  <p className="step-desc-text">Save gate approval and issue a gate pass</p>
                 </div>
               </div>
             </div>
@@ -791,7 +804,7 @@ function ScanToken() {
                   <strong>Vehicle:</strong> {scannedToken.vehicle || "RJ-14-GA-2194"}
                 </div>
                 <div style={{ fontSize: "12px", color: "#059669", fontWeight: 600 }}>
-                  ✓ Land Records & Aadhaar Verified (Govt Portal Sync)
+                  Farmer profile details loaded from the database
                 </div>
 
                 <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
@@ -830,7 +843,7 @@ function ScanToken() {
               >
                 <div style={{ color: "#059669", fontSize: "24px", marginBottom: "4px" }}>✓</div>
                 <h4 style={{ margin: "0 0 6px 0", fontSize: "16px", color: "#065f46" }}>
-                  Gate Pass Issued: #GP-{scannedToken.id.replace(/\D/g, "")}
+                  Gate Pass Issued: {gatePass || "Saving..."}
                 </h4>
                 <p style={{ margin: "0 0 14px 0", fontSize: "13px", color: "#047857" }}>
                   {scannedToken.farmer} cleared for entry · Directed to Weighbridge Bay 2.
@@ -847,7 +860,7 @@ function ScanToken() {
             )}
           </div>
 
-          {/* Card 2: Tamper-Proof Verification */}
+          {/* Card 2: Database-backed verification */}
           <div className="tamper-proof-card">
             <div className="tamper-proof-icon">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -856,9 +869,9 @@ function ScanToken() {
               </svg>
             </div>
             <div>
-              <h4 className="tamper-proof-title">Tamper-Proof Verification</h4>
+              <h4 className="tamper-proof-title">Database-backed Verification</h4>
               <p className="tamper-proof-body">
-                Each gate entry is logged on the blockchain ledger with timestamp, GPS coordinates, and officer signature hash. All records are immutable and auditable.
+                Gate approvals and rejections are stored in the operations database with a server-generated gate pass reference.
               </p>
             </div>
           </div>

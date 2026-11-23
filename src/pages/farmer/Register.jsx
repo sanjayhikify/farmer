@@ -24,6 +24,9 @@ export default function Register() {
         name: formData.name,
         phone: formData.phone,
         pin: formData.pin,
+        village: formData.village,
+        district: formData.district,
+        land_size: formData.landSize,
       });
 
       console.log(response.data);
